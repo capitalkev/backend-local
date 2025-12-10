@@ -6,26 +6,18 @@ import os
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from dotenv import load_dotenv
+from google.cloud.sql.connector import Connector
 
 load_dotenv()
 
-# Configurar credenciales de Google Cloud
-GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-if GOOGLE_APPLICATION_CREDENTIALS:
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = GOOGLE_APPLICATION_CREDENTIALS
-
 DB_HOST = os.getenv("DB_HOST")
-DB_PORT = os.getenv("DB_PORT", "5432")
 DB_NAME = os.getenv("DB_NAME")
 DB_USER = os.getenv("DB_USER")
 DB_PASSWORD = os.getenv("DB_PASSWORD")
 INSTANCE_CONNECTION_NAME = os.getenv("INSTANCE_CONNECTION_NAME")
 
-# Determinar si usamos Cloud SQL Connector o conexión TCP local
 if INSTANCE_CONNECTION_NAME:
-    # Conexión a Cloud SQL usando Python Connector
-    from google.cloud.sql.connector import Connector
-
+    
     connector = Connector()
 
     def getconn():
@@ -41,17 +33,11 @@ if INSTANCE_CONNECTION_NAME:
     engine = create_engine(
         "postgresql+pg8000://",
         creator=getconn,
-        pool_size=5,
-        max_overflow=10,
         pool_pre_ping=True,
-        pool_recycle=3600,
     )
     print(f"[DATABASE] Usando Cloud SQL Connector: {INSTANCE_CONNECTION_NAME}")
 else:
-    # Conexión local TCP
-    DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-    engine = create_engine(DATABASE_URL, echo=False)
-    print(f"[DATABASE] Usando PostgreSQL local: {DB_HOST}:{DB_PORT}")
+    pass
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

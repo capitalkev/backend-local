@@ -1,7 +1,5 @@
 """
-Backend Local Simple - Sin Autenticación
-Puerto: 8002
-Solo para desarrollo local con frontend-local
+Backend Local - Operaciones
 """
 
 import uvicorn
@@ -9,15 +7,22 @@ from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
+from schema import ContactosRequest
 
 from database import get_db, test_connection
-from crud import listar_operaciones, listar_gestiones_por_deudor
-from models import Factura
+from crud import (
+    listar_operaciones,
+    obtener_detalles_operacion,
+    obtener_operacion_por_id,
+    obtener_contactos,
+    obtener_email_filtrados,
+    agregar_contactos,
+)
 
 app = FastAPI(
     title="Backend Local - Operaciones",
     version="1.0.0",
-    description="Backend simple sin autenticación para frontend-local"
+    description="Backend simple sin autenticación para frontend-local",
 )
 
 # Configurar CORS (permite todos los orígenes)
@@ -44,9 +49,7 @@ async def root():
         "message": "Backend Local - Operaciones",
         "version": "1.0.0",
         "description": "Backend simple sin autenticación para desarrollo local",
-        "endpoints": {
-            "operaciones": "GET /operaciones/ - Lista todas las operaciones"
-        }
+        "endpoints": {"operaciones": "GET /operaciones/ - Lista todas las operaciones"},
     }
 
 
@@ -58,111 +61,163 @@ async def health():
 
 @app.get("/operaciones/")
 async def listar_operaciones_endpoint(db: Session = Depends(get_db)):
-    """
-    Lista todas las operaciones en formato compatible con frontend-local
-    """
     try:
-        operaciones = listar_operaciones(db, usuario_email=None, dias=None, limit=None)
+        # 1. Llamamos a la función ligera del CRUD
+        filas = listar_operaciones(db)
 
-        # Obtener todas las facturas para agruparlas
-        todas_facturas = db.query(Factura).all()
+        resultado = []
+        for op in filas:
+            # Construimos el objeto simple para la tabla del frontend
+            resultado.append(
+                {
+                    "id": op["operation_id"],
+                    "cliente": op["emisor_razon_social"] or "Sin nombre",
+                    "monto": float(op["total_monto"]) if op["total_monto"] else 0,
+                    "rucCliente": (op["emisor_rut"] or "").split("-")[0].strip(),
+                    "ejecutivo": str(op["usuario_id"])
+                    if op["usuario_id"]
+                    else "Sin asignar",
+                    "estado": "cedida ok",
+                    "documentos": 0,
+                }
+            )
 
-        # DEBUG
-        print(f"[DEBUG] Total operaciones: {len(operaciones)}")
-        print(f"[DEBUG] Total facturas: {len(todas_facturas)}")
-        if todas_facturas:
-            print(f"[DEBUG] Primera factura operacion_id: {todas_facturas[0].operacion_id} (tipo: {type(todas_facturas[0].operacion_id)})")
-        if operaciones:
-            print(f"[DEBUG] Primera operación id: {operaciones[0].id} (tipo: {type(operaciones[0].id)})")
-
-        # Crear diccionario de facturas agrupadas por operacion_id (STRING)
-        # JOIN: operaciones.operation_id = facturas.operacion_id
-        facturas_por_operacion = {}
-        for factura in todas_facturas:
-            op_id = factura.operacion_id
-            if op_id not in facturas_por_operacion:
-                facturas_por_operacion[op_id] = []
-            facturas_por_operacion[op_id].append(factura)
-
-        print(f"[DEBUG] Keys en facturas_por_operacion: {list(facturas_por_operacion.keys())[:5]}")
-
-        result = {
-            "operaciones": []
-        }
-
-        for op in operaciones:
-            # Obtener facturas usando operation_id (STRING)
-            facturas_op = facturas_por_operacion.get(op.operation_id, [])
-            if not facturas_op:
-                print(f"[DEBUG] No facturas para op.operation_id={op.operation_id}")
-
-            operacion_data = {
-                "id": op.operation_id,
-                "cliente": op.emisor_razon_social or "Sin nombre",
-                "monto": float(op.total_monto) if op.total_monto else 0,
-                "documentos": len(facturas_op),
-                "estado": "cedida ok",  # CONSTANTE (no existe en BD)
-                "rucCliente": (op.emisor_rut or "").split('-')[0].replace('.', '').replace(',', '').strip(),
-                "ejecutivo": str(op.usuario_id) if op.usuario_id else "Sin asignar",
-                "deudores": []
-            }
-
-            # Agrupar facturas por deudor
-            deudores_dict = {}
-            for factura in facturas_op:
-                rut = factura.receptor_rut or ""
-                rut_normalizado = rut.split('-')[0].replace('.', '').replace(',', '').strip() if rut else ""
-
-                if rut not in deudores_dict:
-                    # Gestiones como CONSTANTE VACIA (tabla no existe)
-                    deudores_dict[rut] = {
-                        "nombre": factura.receptor_razon_social or "Sin nombre",
-                        "ruc": rut_normalizado,
-                        "facturas": [],
-                        "gestiones": [],  # CONSTANTE VACIA
-                        "contactos": []  # CONSTANTE VACIA
-                    }
-
-                # Agregar factura al deudor
-                deudores_dict[rut]["facturas"].append({
-                    "folio": str(factura.folio),
-                    "tipoDTE": factura.tipo_dte or "33",
-                    "montoFactura": float(factura.monto_total) if factura.monto_total else 0,
-                    # CONSTANTES (no existen en BD)
-                    "aceptado": False,
-                    "anulado": False,
-                    "reclamado": False,
-                    "isVerified": False,
-                    "estado": "Pendiente",
-                    "fechaEmision": factura.fecha_emision or "",
-                    "historialSII": [
-                        {
-                            "descEvento": "DTE Cedido",
-                            "fechaEvento": ""
-                        }
-                    ],
-                    "estadoSII": "Pendiente",
-                    "contactos": [],
-                    "gestiones": []
-                })
-
-            operacion_data["deudores"] = list(deudores_dict.values())
-            result["operaciones"].append(operacion_data)
-
-        return result
+        return {"operaciones": resultado}
 
     except Exception as e:
-        print(f"[ERROR] Error obteniendo operaciones: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return JSONResponse(
-            status_code=500,
-            content={"error": f"Error obteniendo operaciones: {str(e)}"}
+        print(f"[ERROR] {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.get("/operaciones/{op_id}")
+async def obtener_detalle_operacion_endpoint(op_id: str, db: Session = Depends(get_db)):
+    """
+    Devuelve la estructura compleja (Deudores -> Facturas) para UNA operación.
+    """
+    try:
+        # 1. Buscar las facturas específicas de esta operación
+        facturas = obtener_detalles_operacion(db, op_id)
+        operacion = obtener_operacion_por_id(db, op_id)
+
+        if not facturas:
+            return JSONResponse(
+                status_code=404,
+                content={"message": "Operación no encontrada o sin facturas"},
+            )
+
+        # 2. Agrupar facturas por deudor (Tu lógica original, pero optimizada porque son pocos datos)
+        deudores_dict = {}
+
+        for factura in facturas:  # factura es un diccionario ahora
+            rut = factura["receptor_rut"] or ""
+
+            if rut not in deudores_dict:
+                deudores_dict[rut] = {
+                    "nombre": factura["receptor_razon_social"] or "Sin nombre",
+                    "ruc": rut.split("-")[0].replace(".", "").strip(),
+                    "facturas": [],
+                    "gestiones": [],
+                    "contactos": [],
+                }
+
+            deudores_dict[rut]["facturas"].append(
+                {
+                    "folio": str(factura["folio"]),
+                    "tipoDTE": factura["tipo_dte"] or "33",
+                    "montoFactura": float(factura["monto_total"])
+                    if factura["monto_total"]
+                    else 0,
+                    "fechaEmision": factura["fecha_emision"] or "",
+                    "estado": "Pendiente",
+                }
+            )
+
+        return {"operacion": operacion, "deudores": list(deudores_dict.values())}
+
+    except Exception as e:
+        print(f"[ERROR] {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.get("/contactos/{rut_receptor}")
+async def obtener_contactos_endpoint(rut_receptor: str, db: Session = Depends(get_db)):
+    """
+    Devuelve los contactos asociados a un receptor específico.
+    """
+    try:
+        contactos = obtener_contactos(db, rut_receptor)
+
+        if not contactos:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "message": "No se encontraron contactos para el receptor especificado"
+                },
+            )
+
+        return {"contactos": contactos}
+
+    except Exception as e:
+        print(f"[ERROR] {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+@app.get("/email-filtrados/")
+async def obtener_email_filtrados_endpoint(
+    ruc_cliente: str,
+    ruc_deudor: str,
+    db: Session = Depends(get_db),
+):
+    """
+    Devuelve los emails filtrados para un cliente y deudor específicos.
+    """
+    try:
+        emails = obtener_email_filtrados(db, ruc_cliente, ruc_deudor)
+
+        if not emails:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "message": "No se encontraron emails filtrados para el cliente y deudor especificados"
+                },
+            )
+
+        return {"emails": emails}
+
+    except Exception as e:
+        print(f"[ERROR] {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+@app.post("/add-contactos/")
+async def agregar_contactos_endpoint(
+    solicitud: ContactosRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Agrega emails a un deudor (ruc_deudor).
+    Body esperado:
+    {
+      "ruc_deudor": "12345678",
+      "emails": ["correo1@empresa.com", "correo2@empresa.com"]
+    }
+    """
+    try:
+        agregar_contactos(
+            db=db,
+            ruc_cliente=solicitud.ruc_cliente,
+            emails=solicitud.emails,
+            ruc_deudor=solicitud.ruc_deudor,
         )
 
+        return {
+            "status": "success",
+            "message": f"Se procesaron {len(solicitud.emails)} contactos para el RUT {solicitud.ruc_deudor}",
+        }
+
+    except Exception as e:
+        print(f"[ERROR] Al agregar contactos: {str(e)}")
+        return JSONResponse(
+            status_code=500, content={"error": f"Error interno: {str(e)}"}
+        )
 
 if __name__ == "__main__":
-    print("[STARTUP] Iniciando Backend Local en puerto 8080...")
-    print("[CONFIG] CORS habilitado para todos los origenes")
-    print("[CONFIG] Sin autenticacion (acceso libre)")
     uvicorn.run(app, host="0.0.0.0", port=8080)

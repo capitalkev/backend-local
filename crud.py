@@ -1,80 +1,96 @@
 """
-Funciones CRUD (AJUSTADAS a la estructura real de la BD)
+Funciones CRUD
 """
+
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from models import Operacion, Factura, Gestion
-from datetime import datetime, timedelta
+from models import Operacion, Gestion
 from typing import Optional
 
 
-def listar_operaciones(db: Session, usuario_email: Optional[str] = None, dias: Optional[int] = None, limit: Optional[int] = None):
+def listar_operaciones(db: Session):
     """
-    Lista operaciones usando SQL directo para evitar joins automáticos
+    Trae solo la tabla operaciones, sin JOINS pesados.
     """
     sql = """
-        SELECT
-            id,
+        SELECT 
             operation_id,
-            usuario_id,
-            emisor_rut,
             emisor_razon_social,
+            emisor_rut,
             total_monto,
-            tasa,
-            comision,
-            created_at,
-            trello_card_id
+            usuario_id
         FROM operaciones
         ORDER BY created_at DESC
     """
+    result = db.execute(text(sql))
+    return [dict(row._mapping) for row in result]
 
-    params = {}
 
-    if limit:
-        sql += " LIMIT :limit"
-        params["limit"] = limit
-
+def obtener_detalles_operacion(db: Session, op_id: str):
+    """
+    Trae las facturas SOLO de la operación solicitada
+    """
+    sql = """
+        SELECT f.* FROM facturas f
+        JOIN operaciones o ON f.operacion_id = o.operation_id
+        WHERE o.operation_id = :op_id
+    """
+    params = {"op_id": op_id}
     result = db.execute(text(sql), params)
-    rows = result.fetchall()
-
-    # Convertir rows a objetos tipo Operacion
-    operaciones = []
-    for row in rows:
-        op = Operacion()
-        op.id = row[0]
-        op.operation_id = row[1]
-        op.usuario_id = row[2]
-        op.emisor_rut = row[3]
-        op.emisor_razon_social = row[4]
-        op.total_monto = row[5]
-        op.tasa = row[6]
-        op.comision = row[7]
-        op.created_at = row[8]
-        op.trello_card_id = row[9]
-        operaciones.append(op)
-
-    return operaciones
+    return [dict(row._mapping) for row in result]
 
 
-def obtener_facturas_por_operation_id(db: Session, operation_id: str):
+def obtener_operacion_por_id(db: Session, op_id: str) -> Optional[Operacion]:
     """
-    Obtiene facturas por operation_id (necesita JOIN manual porque los tipos no coinciden)
+    Obtiene una operación por su ID.
     """
-    # Consulta SQL directa porque operation_id es VARCHAR en operaciones pero INTEGER en facturas
-    query = text("""
-        SELECT f.*
-        FROM facturas f
-        INNER JOIN operaciones o ON f.operacion_id = o.id
-        WHERE o.operation_id = :operation_id
-    """)
-
-    result = db.execute(query, {"operation_id": operation_id})
-    return result.fetchall()
+    return db.query(Operacion).filter(Operacion.operation_id == op_id).first()
 
 
-def listar_gestiones_por_deudor(db: Session, operation_id: str, receptor_rut: str):
-    """Lista todas las gestiones de un deudor específico en una operación"""
-    return db.query(Gestion).filter(
-        Gestion.operation_id == operation_id,
-        Gestion.receptor_rut == receptor_rut
-    ).order_by(Gestion.created_at.desc()).all()
+def obtener_contactos(db: Session, rut_receptor: str):
+    """
+    Obtiene los contactos asociados a un receptor específico.
+    """
+    sql = """
+        SELECT DISTINCT(email) FROM contactos
+        WHERE rut = :rut_receptor
+    """
+    params = {"rut_receptor": rut_receptor}
+    result = db.execute(text(sql), params)
+    return [dict(row._mapping) for row in result]
+
+
+def obtener_email_filtrados(db: Session, ruc_cliente: str, ruc_deudor: str):
+    """
+    Obtiene los emails filtrados para un cliente y deudor específicos.
+    """
+    sql = """
+        SELECT DISTINCT(email) FROM db_filtrado
+        WHERE ruc_cliente = :ruc_cliente AND ruc_deudor = :ruc_deudor
+    """
+    params = {
+        "ruc_cliente": ruc_cliente,
+        "ruc_deudor": ruc_deudor,
+    }
+    result = db.execute(text(sql), params)
+    return [dict(row._mapping) for row in result]
+
+def agregar_contactos(db: Session, ruc_cliente: str, emails: list, ruc_deudor: str):
+    try:
+        for email in emails:
+            sql = """
+                INSERT INTO db_filtrado (ruc_cliente, email, ruc_deudor)
+                VALUES (:ruc_cliente, :email, :ruc_deudor)
+            """
+            params = {
+                "ruc_cliente": ruc_cliente,
+                "email": email,
+                "ruc_deudor": ruc_deudor,
+            }
+            db.execute(text(sql), params)
+
+        db.commit()
+        return True
+    except Exception as e:
+        db.rollback()
+        raise e
