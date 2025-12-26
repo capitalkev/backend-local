@@ -1,23 +1,21 @@
-"""
-Backend Local - Operaciones
-"""
-
 import uvicorn
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from schema import ContactosRequest
-
-from database import get_db, test_connection
+from database import get_db
 from crud import (
     listar_operaciones,
-    obtener_detalles_operacion,
-    obtener_operacion_por_id,
     obtener_contactos,
     obtener_email_filtrados,
     agregar_contactos,
+    extraer_drive,
+    obtener_operacion_completa,
 )
+
+from gmail_service import enviar_correo_multiples, autenticar_gmail
+
 
 app = FastAPI(
     title="Backend Local - Operaciones",
@@ -25,7 +23,6 @@ app = FastAPI(
     description="Backend simple sin autenticación para frontend-local",
 )
 
-# Configurar CORS (permite todos los orígenes)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -33,13 +30,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Verifica la conexión a la base de datos al iniciar"""
-    print("[STARTUP] Iniciando Backend Local...")
-    test_connection()
 
 
 @app.get("/")
@@ -78,7 +68,6 @@ async def listar_operaciones_endpoint(db: Session = Depends(get_db)):
                     if op["usuario_id"]
                     else "Sin asignar",
                     "estado": "cedida ok",
-                    "documentos": 0,
                 }
             )
 
@@ -95,44 +84,15 @@ async def obtener_detalle_operacion_endpoint(op_id: str, db: Session = Depends(g
     Devuelve la estructura compleja (Deudores -> Facturas) para UNA operación.
     """
     try:
-        # 1. Buscar las facturas específicas de esta operación
-        facturas = obtener_detalles_operacion(db, op_id)
-        operacion = obtener_operacion_por_id(db, op_id)
+        resultado = obtener_operacion_completa(db, op_id)
 
-        if not facturas:
+        if not resultado:
             return JSONResponse(
                 status_code=404,
                 content={"message": "Operación no encontrada o sin facturas"},
             )
 
-        # 2. Agrupar facturas por deudor (Tu lógica original, pero optimizada porque son pocos datos)
-        deudores_dict = {}
-
-        for factura in facturas:  # factura es un diccionario ahora
-            rut = factura["receptor_rut"] or ""
-
-            if rut not in deudores_dict:
-                deudores_dict[rut] = {
-                    "nombre": factura["receptor_razon_social"] or "Sin nombre",
-                    "ruc": rut.split("-")[0].replace(".", "").strip(),
-                    "facturas": [],
-                    "gestiones": [],
-                    "contactos": [],
-                }
-
-            deudores_dict[rut]["facturas"].append(
-                {
-                    "folio": str(factura["folio"]),
-                    "tipoDTE": factura["tipo_dte"] or "33",
-                    "montoFactura": float(factura["monto_total"])
-                    if factura["monto_total"]
-                    else 0,
-                    "fechaEmision": factura["fecha_emision"] or "",
-                    "estado": "Pendiente",
-                }
-            )
-
-        return {"operacion": operacion, "deudores": list(deudores_dict.values())}
+        return resultado
 
     except Exception as e:
         print(f"[ERROR] {e}")
@@ -161,6 +121,7 @@ async def obtener_contactos_endpoint(rut_receptor: str, db: Session = Depends(ge
         print(f"[ERROR] {e}")
         return JSONResponse(status_code=500, content={"error": str(e)})
 
+
 @app.get("/email-filtrados/")
 async def obtener_email_filtrados_endpoint(
     ruc_cliente: str,
@@ -186,6 +147,7 @@ async def obtener_email_filtrados_endpoint(
     except Exception as e:
         print(f"[ERROR] {e}")
         return JSONResponse(status_code=500, content={"error": str(e)})
+
 
 @app.post("/add-contactos/")
 async def agregar_contactos_endpoint(
@@ -219,5 +181,35 @@ async def agregar_contactos_endpoint(
             status_code=500, content={"error": f"Error interno: {str(e)}"}
         )
 
+
+@app.post("/send-gmail/{destinatarios}/{op_id}")
+async def send_gmail(destinatarios: str, op_id: str, db: Session = Depends(get_db)):
+    """
+    Envía un correo electrónico a múltiples destinatarios usando Gmail API.
+    """
+    servicio = autenticar_gmail()
+    if servicio:
+        drive_url = extraer_drive(db, op_id)
+        resultado = enviar_correo_multiples(
+            servicio, destinatarios, op_id, db, drive_url
+        )
+        if resultado:
+            return {
+                "status": "success",
+                "message": "Correo enviado correctamente",
+                "details": resultado,
+            }
+        else:
+            return JSONResponse(
+                status_code=500,
+                content={"error": "No se pudo enviar el correo"},
+            )
+    else:
+        return JSONResponse(
+            status_code=500,
+            content={"error": "No se pudo crear el servicio de Gmail"},
+        )
+
+
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8080)
+    uvicorn.run(app, host="localhost", port=8080)

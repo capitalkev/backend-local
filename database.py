@@ -1,7 +1,3 @@
-"""
-Database Configuration - PostgreSQL Connection usando Cloud SQL Python Connector
-"""
-
 import os
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
@@ -48,15 +44,3 @@ def get_db():
         yield db
     finally:
         db.close()
-
-def test_connection():
-    """Prueba la conexión a PostgreSQL"""
-    try:
-        with engine.connect() as conn:
-            result = conn.execute(text("SELECT version()"))
-            version = result.fetchone()[0]
-            print(f"[OK] PostgreSQL conectado: {version}")
-            return True
-    except Exception as e:
-        print(f"[ERROR] Error conectando a PostgreSQL: {e}")
-        return False
