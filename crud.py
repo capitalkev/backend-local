@@ -266,13 +266,17 @@ def obtener_operacion_completa(db: Session, op_id: str):
                 "contactos": [],
             }
 
-        deudores_dict[rut]["facturas"].append({
-            "folio": str(factura["folio"]),
-            "tipoDTE": factura["tipo_dte"] or "33",
-            "montoFactura": float(factura["monto_total"]) if factura["monto_total"] else 0,
-            "fechaEmision": factura["fecha_emision"] or "",
-            "estado": "Pendiente",
-        })
+        deudores_dict[rut]["facturas"].append(
+            {
+                "folio": str(factura["folio"]),
+                "tipoDTE": factura["tipo_dte"] or "33",
+                "montoFactura": float(factura["monto_total"])
+                if factura["monto_total"]
+                else 0,
+                "fechaEmision": factura["fecha_emision"] or "",
+                "estado": "Pendiente",
+            }
+        )
 
     return {
         "operacion": {
@@ -283,11 +287,12 @@ def obtener_operacion_completa(db: Session, op_id: str):
             "total_monto": float(operacion.total_monto) if operacion.total_monto else 0,
             "tasa": float(operacion.tasa) if operacion.tasa else 0,
             "comision": operacion.comision,
-            "created_at": operacion.created_at.isoformat() if operacion.created_at else None,
+            "created_at": operacion.created_at.isoformat()
+            if operacion.created_at
+            else None,
             "usuario_id": operacion.usuario_id,
             "trello_card_id": operacion.trello_card_id,
             "drive_folder_url": operacion.drive_folder_url,
         },
-        "deudores": list(deudores_dict.values())
+        "deudores": list(deudores_dict.values()),
     }
-

@@ -1,5 +1,5 @@
 import uvicorn
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
@@ -14,7 +14,7 @@ from crud import (
     obtener_operacion_completa,
 )
 
-from gmail_service import enviar_correo_multiples, autenticar_gmail
+from gmail_service import enviar_correo_multiples, autenticar_gmail, reenviar_a_multiples_destinatarios
 
 
 app = FastAPI(
@@ -39,7 +39,15 @@ async def root():
         "message": "Backend Local - Operaciones",
         "version": "1.0.0",
         "description": "Backend simple sin autenticación para desarrollo local",
-        "endpoints": {"operaciones": "GET /operaciones/ - Lista todas las operaciones"},
+        "endpoints": {
+            "operaciones": "GET /operaciones/ - Lista todas las operaciones",
+            "operacion_detalle": "GET /operaciones/{op_id} - Obtiene detalle de una operación",
+            "contactos": "GET /contactos/{rut_receptor} - Obtiene contactos de un receptor",
+            "email_filtrados": "GET /email-filtrados/?ruc_cliente=X&ruc_deudor=Y - Obtiene emails filtrados",
+            "agregar_contactos": "POST /add-contactos/ - Agrega contactos a un deudor",
+            "enviar_gmail": "POST /send-gmail/{destinatarios}/{op_id}/{rut_deudor} - Envía correo con Gmail",
+            "reenviar_multiples": "GET /reenviar-multiples/{mensaje_id}?destinatarios=X - Reenvía correo manteniendo hilo",
+        },
     }
 
 
@@ -182,16 +190,21 @@ async def agregar_contactos_endpoint(
         )
 
 
-@app.post("/send-gmail/{destinatarios}/{op_id}")
-async def send_gmail(destinatarios: str, op_id: str, db: Session = Depends(get_db)):
+@app.post("/send-gmail/{destinatarios}/{op_id}/{rut_deudor}")
+async def send_gmail(destinatarios: str, op_id: str, rut_deudor: str, db: Session = Depends(get_db)):
     """
     Envía un correo electrónico a múltiples destinatarios usando Gmail API.
+
+    Args:
+        destinatarios: Emails separados por comas
+        op_id: ID de la operación
+        rut_deudor: RUT del deudor (sin puntos, con o sin guión)
     """
     servicio = autenticar_gmail()
     if servicio:
         drive_url = extraer_drive(db, op_id)
         resultado = enviar_correo_multiples(
-            servicio, destinatarios, op_id, db, drive_url
+            servicio, destinatarios, op_id, db, drive_url, rut_deudor
         )
         if resultado:
             return {
@@ -209,6 +222,39 @@ async def send_gmail(destinatarios: str, op_id: str, db: Session = Depends(get_d
             status_code=500,
             content={"error": "No se pudo crear el servicio de Gmail"},
         )
+
+
+@app.get("/reenviar-multiples/{mensaje_id}")
+def reenviar_multiples_endpoint(mensaje_id: str, destinatarios: str):
+    """
+    Responde a un correo enviándolo a múltiples destinatarios (mantiene el hilo)
+
+    Args:
+        mensaje_id: ID del mensaje original
+        destinatarios: Emails separados por comas (query parameter)
+
+    Returns:
+        Dict con mensaje_id, lista de destinatarios y thread_id
+
+    Ejemplo:
+        GET /reenviar-multiples/abc123?destinatarios=email1@test.com,email2@test.com
+    """
+    servicio = autenticar_gmail()
+    if not servicio:
+        raise HTTPException(
+            status_code=500,
+            detail="No se pudo crear el servicio de Gmail",
+        )
+
+    resultado = reenviar_a_multiples_destinatarios(servicio, mensaje_id, destinatarios)
+
+    if resultado is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Error al enviar respuesta a múltiples destinatarios",
+        )
+
+    return resultado
 
 
 if __name__ == "__main__":
